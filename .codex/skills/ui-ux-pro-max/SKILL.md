@@ -1,42 +1,15 @@
 ---
 name: ui-ux-pro-max
-description: "UI/UX design intelligence. 50 styles, 21 palettes, 50 font pairings, 20 charts, 8 stacks (React, Next.js, Vue, Svelte, SwiftUI, React Native, Flutter, Tailwind). Actions: plan, build, create, design, implement, review, fix, improve, optimize, enhance, refactor, check UI/UX code. Projects: website, landing page, dashboard, admin panel, e-commerce, SaaS, portfolio, blog, mobile app, .html, .tsx, .vue, .svelte. Elements: button, modal, navbar, sidebar, card, table, form, chart. Styles: glassmorphism, claymorphism, minimalism, brutalism, neumorphism, bento grid, dark mode, responsive, skeuomorphism, flat design. Topics: color palette, accessibility, animation, layout, typography, font pairing, spacing, hover, shadow, gradient."
+description: "UI/UX design intelligence with searchable database of 50 styles, 21 palettes, 50 font pairings, 20 chart types, and 8 stack-specific guides. Focuses on visual design decisions, not business logic or backend code. Use when the user asks to design, build, review, or improve UI components, create layouts, choose color palettes, select typography, or apply design styles (glassmorphism, minimalism, brutalism, dark mode, etc.) for websites, dashboards, landing pages, mobile apps, or SaaS products using React, Next.js, Vue, Svelte, SwiftUI, React Native, Flutter, or Tailwind CSS."
 ---
 
 # UI/UX Pro Max - Design Intelligence
 
 Searchable database of UI styles, color palettes, font pairings, chart types, product recommendations, UX guidelines, and stack-specific best practices.
 
-## Prerequisites
-
-Check if Python is installed:
-
-```bash
-python3 --version || python --version
-```
-
-If Python is not installed, install it based on user's OS:
-
-**macOS:**
-```bash
-brew install python3
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt update && sudo apt install python3
-```
-
-**Windows:**
-```powershell
-winget install Python.Python.3.12
-```
-
----
-
 ## How to Use This Skill
 
-When user requests UI/UX work (design, build, create, implement, review, fix, improve), follow this workflow:
+When the user requests UI/UX work (design, build, create, implement, review, fix, improve), follow this workflow:
 
 ### Step 1: Analyze User Requirements
 
