@@ -1022,7 +1022,7 @@ function createWebsiteDraft(prefillLogPath = ''): WebsiteDraft {
   };
 }
 
-const ipAliases = ['ip', 'remote_addr', 'client_ip', 'http_x_forwarded_for'];
+const ipAliases = ['ip', 'remote_addr', 'real_client_ip', 'client_ip', 'http_x_forwarded_for'];
 const timeAliases = ['time', 'time_local', 'time_iso8601'];
 const statusAliases = ['status'];
 const urlAliases = ['url', 'request_uri', 'uri', 'path'];
@@ -1321,10 +1321,11 @@ function tokenRegexForVar(name: string, used: Set<string>, quoted: boolean) {
     return `(?<${group}>${pattern})`;
   };
 
-  const commaListPattern = '[^,\\s]+(?:,\\s*[^,\\s]+)*';
+  let commaListPattern = '[^,\\s]+(?:,\\s*[^,\\s]+)*';
   let optionalTokenPattern = '\\S*';
   let requiredTokenPattern = '\\S+';
   if (quoted) {
+    commaListPattern = '(?:[^,\\s]+(?:,\\s*[^,\\s]+)*)?';
     optionalTokenPattern = '[^"]*';
     requiredTokenPattern = '[^"]+';
   }
@@ -1332,6 +1333,8 @@ function tokenRegexForVar(name: string, used: Set<string>, quoted: boolean) {
   switch (name) {
     case 'remote_addr':
       return addGroup('ip', requiredTokenPattern);
+    case 'real_client_ip':
+      return addGroup('real_client_ip', requiredTokenPattern);
     case 'http_x_forwarded_for':
       return addGroup('http_x_forwarded_for', commaListPattern);
     case 'remote_user':

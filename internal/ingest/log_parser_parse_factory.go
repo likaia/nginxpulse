@@ -234,6 +234,7 @@ func tokenRegexForVar(name string, used map[string]bool, quoted bool) string {
 	requiredTokenPattern := `\S+`
 	requiredQuotedPattern := `[^"]+`
 	if quoted {
+		commaListPattern = `(?:[^,\s]+(?:,\s*[^,\s]+)*)?`
 		optionalTokenPattern = optionalQuotedPattern
 		requiredTokenPattern = requiredQuotedPattern
 	}
@@ -241,6 +242,8 @@ func tokenRegexForVar(name string, used map[string]bool, quoted bool) string {
 	switch name {
 	case "remote_addr":
 		return addGroup("ip", requiredTokenPattern)
+	case "real_client_ip":
+		return addGroup("real_client_ip", requiredTokenPattern)
 	case "http_x_forwarded_for":
 		return addGroup("http_x_forwarded_for", commaListPattern)
 	case "remote_user":

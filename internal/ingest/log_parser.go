@@ -52,7 +52,7 @@ const (
 )
 
 var (
-	ipAliases            = []string{"ip", "remote_addr", "client_ip", "http_x_forwarded_for"}
+	ipAliases            = []string{"ip", "remote_addr", "real_client_ip", "client_ip", "http_x_forwarded_for"}
 	timeAliases          = []string{"time", "time_local", "time_iso8601"}
 	methodAliases        = []string{"method", "request_method"}
 	urlAliases           = []string{"url", "request_uri", "uri", "path"}

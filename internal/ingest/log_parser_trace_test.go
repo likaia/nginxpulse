@@ -109,6 +109,66 @@ func TestDefaultNginxParserParsesExtendedTraceSuffix(t *testing.T) {
 	}
 }
 
+func TestNginxJSONLogFormatParsesEmptyUpstreamResponseTime(t *testing.T) {
+	parser, err := newLogLineParser(config.WebsiteConfig{
+		LogType:   "nginx",
+		LogFormat: nginxJSONTraceLogFormat(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("newLogLineParser(nginx json logFormat) error: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	line := `{"@timestamp":"` + now.Format(time.RFC3339) + `","host":"example.com","server_name":"example.com","scheme":"https","remote_addr":"203.0.113.10","request_method":"GET","request":"GET /index.html HTTP/1.1","status":200,"request_length":128,"body_bytes_sent":512,"request_time":0.012,"upstream_response_time":"","http_referer":"","http_user_agent":"curl/8.0.1","http_x_forwarded_for":""}`
+
+	p := &LogParser{retentionDays: 30}
+	record, err := p.parseRegexLogLine(parser, line)
+	if err != nil {
+		t.Fatalf("parseRegexLogLine error: %v", err)
+	}
+	if record.IP != "203.0.113.10" {
+		t.Fatalf("unexpected ip: %q", record.IP)
+	}
+	if record.RequestTimeMs != 12 {
+		t.Fatalf("unexpected request_time_ms: %d", record.RequestTimeMs)
+	}
+	if record.UpstreamTimeMs != 0 {
+		t.Fatalf("unexpected upstream_response_time_ms: %d", record.UpstreamTimeMs)
+	}
+	if record.Host != "example.com" {
+		t.Fatalf("unexpected host: %q", record.Host)
+	}
+}
+
+func TestNginxJSONLogFormatParsesQuotedUpstreamResponseTime(t *testing.T) {
+	parser, err := newLogLineParser(config.WebsiteConfig{
+		LogType:   "nginx",
+		LogFormat: nginxJSONTraceLogFormat(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("newLogLineParser(nginx json logFormat) error: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	line := `{"@timestamp":"` + now.Format(time.RFC3339) + `","host":"example.com","server_name":"example.com","scheme":"https","remote_addr":"203.0.113.10","request_method":"GET","request":"GET /api HTTP/1.1","status":200,"request_length":256,"body_bytes_sent":1024,"request_time":0.245,"upstream_response_time":"0.133","http_referer":"https://example.com/","http_user_agent":"curl/8.0.1","http_x_forwarded_for":"198.51.100.1"}`
+
+	p := &LogParser{retentionDays: 30}
+	record, err := p.parseRegexLogLine(parser, line)
+	if err != nil {
+		t.Fatalf("parseRegexLogLine error: %v", err)
+	}
+	if record.RequestTimeMs != 245 {
+		t.Fatalf("unexpected request_time_ms: %d", record.RequestTimeMs)
+	}
+	if record.UpstreamTimeMs != 133 {
+		t.Fatalf("unexpected upstream_response_time_ms: %d", record.UpstreamTimeMs)
+	}
+}
+
+func nginxJSONTraceLogFormat() string {
+	return `{"@timestamp":"$time_iso8601","host":"$host","server_name":"$server_name","scheme":"$scheme","remote_addr":"$real_client_ip","request_method":"$request_method","request":"$request","status":$status,"request_length":$request_length,"body_bytes_sent":$body_bytes_sent,"request_time":$request_time,"upstream_response_time":"$upstream_response_time","http_referer":"$http_referer","http_user_agent":"$http_user_agent","http_x_forwarded_for":"$http_x_forwarded_for"}`
+}
+
 func mustCompileRegex(t *testing.T, pattern string) *regexp.Regexp {
 	t.Helper()
 	regex, err := regexp.Compile(pattern)
