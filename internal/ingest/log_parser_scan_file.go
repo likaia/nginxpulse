@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/likaia/nginxpulse/internal/enrich"
@@ -127,9 +129,10 @@ func (p *LogParser) scanSingleFile(
 				p.notifyFileIO(websiteID, logPath, "设置文件读取位置", err)
 			} else {
 				sourceCtx := fileParseSourceContext(logPath, recentOffset)
-				entriesCount, _, minTs, maxTs := p.parseLogLines(
+				entriesCount, bytesRead, minTs, maxTs := p.parseLogLines(
 					file, websiteID, sourceCtx, parserResult, parseWindow{minTs: cutoffTs},
 				)
+				fileState.LastOffset = recentOffset + bytesRead
 				p.updateParsedRange(&fileState, minTs, maxTs)
 				if maxTs > fileState.LastTimestamp {
 					fileState.LastTimestamp = maxTs
@@ -204,11 +207,7 @@ func (p *LogParser) scanSingleFile(
 		closer.Close()
 	}
 
-	if isGzip {
-		fileState.LastOffset = startOffset + bytesRead
-	} else {
-		fileState.LastOffset = currentSize
-	}
+	fileState.LastOffset = startOffset + bytesRead
 	fileState.LastSize = currentSize
 	p.updateParsedRange(&fileState, minTs, maxTs)
 	if maxTs > fileState.LastTimestamp {
@@ -425,104 +424,370 @@ func (p *LogParser) findRecentOffset(
 	return 0, lastTs, nil
 }
 
-// parseLogLines 解析日志行并返回解析的记录数
+func readLineAlignedShards(
+	reader io.Reader,
+	targetSize int,
+	emit func(baseBytes int64, data []byte) bool,
+) (int64, error) {
+	if targetSize <= 0 {
+		targetSize = 256 * 1024
+	}
+	buffered := bufio.NewReaderSize(reader, targetSize)
+	shard := make([]byte, 0, targetSize)
+	var shardBase int64
+	var totalBytes int64
+
+	for {
+		line, err := buffered.ReadBytes('\n')
+		if len(line) > 0 {
+			shard = append(shard, line...)
+			totalBytes += int64(len(line))
+		}
+		if len(shard) >= targetSize {
+			if !emit(shardBase, shard) {
+				return totalBytes, nil
+			}
+			shardBase = totalBytes
+			shard = make([]byte, 0, targetSize)
+		}
+		if err != nil {
+			if len(shard) > 0 {
+				_ = emit(shardBase, shard)
+			}
+			if errors.Is(err, io.EOF) {
+				return totalBytes, nil
+			}
+			return totalBytes, err
+		}
+	}
+}
+
+// parseLogLines 解析日志行，并将多 worker 字节分片解析与批量写入组成有界流水线。
 func (p *LogParser) parseLogLines(
 	reader io.Reader, websiteID string, sourceCtx parseSourceContext, parserResult *ParserResult, window parseWindow) (int, int64, int64, int64) {
-	scanner := bufio.NewScanner(reader)
+	type batchJob struct {
+		logs          []store.NginxLogRecord
+		whitelistHits map[string]*whitelistHit
+		endBytes      int64
+		minTs         int64
+		maxTs         int64
+		buckets       map[int64]struct{}
+	}
+	type batchResult struct {
+		job batchJob
+		err error
+	}
+
+	type parseShardJob struct {
+		seq       int64
+		baseBytes int64
+		data      []byte
+	}
+	type parsedShardEntry struct {
+		entry    store.NginxLogRecord
+		match    enrich.WhitelistMatch
+		matched  bool
+		endBytes int64
+	}
+	type parseShardResult struct {
+		seq     int64
+		entries []parsedShardEntry
+	}
+	type scanSummary struct {
+		totalBytes int64
+		err        error
+	}
+
+	lineParser, err := p.getLineParserForSource(websiteID, sourceCtx.sourceID)
+	if err != nil {
+		parserResult.Success = false
+		parserResult.Error = err
+		return 0, 0, 0, 0
+	}
+
 	entriesCount := 0
 	var minTs int64
 	var maxTs int64
 	parsedBuckets := make(map[int64]struct{})
 	var whitelistHits map[string]*whitelistHit
-	var batchWhitelistHits map[string]*whitelistHit
 	domainMatcher := newWebsiteDomainMatcher(websiteID)
+	whitelistMatcher := p.whitelistMatchers[websiteID]
 
-	// 批量插入相关
+	// 只允许一个批次在数据库中执行。主 goroutine 在此期间解析下一批，既实现重叠，
+	// 又避免数据库变慢时未落库批次和内存无界增长。
+	jobs := make(chan batchJob)
+	results := make(chan batchResult, 1)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for job := range jobs {
+			p.markBatchIPGeoPending(job.logs)
+			err := p.repo.BatchInsertLogsForWebsite(websiteID, job.logs)
+			if err == nil {
+				p.enqueueBatchIPGeo(job.logs)
+			}
+			results <- batchResult{job: job, err: err}
+		}
+	}()
+	defer func() {
+		close(jobs)
+		<-writerDone
+	}()
+
 	batch := make([]store.NginxLogRecord, 0, p.parseBatchSize)
+	var batchWhitelistHits map[string]*whitelistHit
+	var batchMinTs int64
+	var batchMaxTs int64
+	batchBuckets := make(map[int64]struct{})
+	var committedBytes int64
+	inFlight := false
+	pipelineFailed := false
 
-	// 处理一批数据
-	processBatch := func() {
-		if len(batch) == 0 {
-			return
+	mergeSuccessfulBatch := func(result batchResult) bool {
+		inFlight = false
+		if result.err != nil {
+			parserResult.Success = false
+			parserResult.Error = result.err
+			logrus.Errorf("批量插入网站 %s 的日志记录失败: %v", websiteID, result.err)
+			p.notifyDatabaseWrite(websiteID, "写入日志批次", result.err)
+			return false
 		}
 
-		// 先把本批次 location 标记为“待解析”，确保日志落库后前端可见；
-		// 再在日志成功落库后写入 ip_geo_pending，避免“先入队、后落库”导致回填命中空 ip_id 后把队列误删。
-		p.markBatchIPGeoPending(batch)
-		if err := p.repo.BatchInsertLogsForWebsite(websiteID, batch); err != nil {
-			logrus.Errorf("批量插入网站 %s 的日志记录失败: %v", websiteID, err)
-			p.notifyDatabaseWrite(websiteID, "写入日志批次", err)
-		} else {
-			p.enqueueBatchIPGeo(batch)
-			whitelistHits = mergeWhitelistHits(whitelistHits, batchWhitelistHits)
+		committedBytes = result.job.endBytes
+		entriesCount += len(result.job.logs)
+		parserResult.TotalEntries += len(result.job.logs)
+		whitelistHits = mergeWhitelistHits(whitelistHits, result.job.whitelistHits)
+		if result.job.minTs > 0 && (minTs == 0 || result.job.minTs < minTs) {
+			minTs = result.job.minTs
 		}
-
-		batch = batch[:0] // 清空批次但保留容量
-		batchWhitelistHits = nil
+		if result.job.maxTs > maxTs {
+			maxTs = result.job.maxTs
+		}
+		for bucket := range result.job.buckets {
+			parsedBuckets[bucket] = struct{}{}
+		}
+		return true
 	}
 
-	// 逐行处理
-	const progressChunk = int64(64 * 1024)
-	var pendingBytes int64
-	var totalBytes int64
-	for scanner.Scan() {
-		line := scanner.Text()
-		lineBytes := int64(len(line) + 1)
-		lineOffset := sourceCtx.startOffset + totalBytes
-		pendingBytes += lineBytes
-		totalBytes += lineBytes
-		if pendingBytes >= progressChunk {
-			addParsingProgress(pendingBytes)
-			pendingBytes = 0
+	awaitInFlight := func() bool {
+		if !inFlight {
+			return true
+		}
+		return mergeSuccessfulBatch(<-results)
+	}
+
+	submitBatch := func(endBytes int64) bool {
+		if len(batch) == 0 {
+			return true
+		}
+		if !awaitInFlight() {
+			return false
 		}
 
-		entry, err := p.parseLogLine(websiteID, sourceCtx.sourceID, line)
-		if err != nil {
-			continue
+		jobs <- batchJob{
+			logs:          batch,
+			whitelistHits: batchWhitelistHits,
+			endBytes:      endBytes,
+			minTs:         batchMinTs,
+			maxTs:         batchMaxTs,
+			buckets:       batchBuckets,
 		}
-		if !domainMatcher.includesHost(entry.Host) {
-			continue
+		inFlight = true
+		batch = make([]store.NginxLogRecord, 0, p.parseBatchSize)
+		batchWhitelistHits = nil
+		batchMinTs = 0
+		batchMaxTs = 0
+		batchBuckets = make(map[int64]struct{})
+		return true
+	}
+
+	const (
+		parseShardSize = 256 * 1024
+		maxParseWorker = 32
+	)
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > maxParseWorker {
+		workerCount = maxParseWorker
+	}
+	queueSize := workerCount * 2
+	parseJobs := make(chan parseShardJob, queueSize)
+	parseResults := make(chan parseShardResult, queueSize)
+	shardSlots := make(chan struct{}, queueSize)
+	scanDone := make(chan scanSummary, 1)
+	cancelParsing := make(chan struct{})
+	var cancelOnce sync.Once
+	stopParsing := func() {
+		cancelOnce.Do(func() { close(cancelParsing) })
+	}
+	defer stopParsing()
+
+	// 每个 worker 独立遍历一个换行对齐的字节分片，并执行正则、域名、时间窗口和白名单过滤。
+	parseShard := func(job parseShardJob) parseShardResult {
+		result := parseShardResult{
+			seq:     job.seq,
+			entries: make([]parsedShardEntry, 0, len(job.data)/256),
 		}
-		entry.Fingerprint = buildLogLineFingerprint(sourceCtx, lineOffset, line)
-		ts := entry.Timestamp.Unix()
-		if !window.allows(ts) {
-			continue
+		for cursor := 0; cursor < len(job.data); {
+			lineEnd := len(job.data)
+			next := len(job.data)
+			if newline := bytes.IndexByte(job.data[cursor:], '\n'); newline >= 0 {
+				lineEnd = cursor + newline
+				next = lineEnd + 1
+			}
+			contentEnd := lineEnd
+			if contentEnd > cursor && job.data[contentEnd-1] == '\r' {
+				contentEnd--
+			}
+			line := string(job.data[cursor:contentEnd])
+			lineOffset := sourceCtx.startOffset + job.baseBytes + int64(cursor)
+			endBytes := job.baseBytes + int64(next)
+			cursor = next
+
+			var entry *store.NginxLogRecord
+			var err error
+			switch lineParser.parseType {
+			case parseTypeCaddyJSON:
+				entry, err = p.parseCaddyJSONLine(line, lineParser)
+			default:
+				entry, err = p.parseRegexLogLine(lineParser, line)
+			}
+			if err != nil || !domainMatcher.includesHost(entry.Host) {
+				continue
+			}
+			if !window.allows(entry.Timestamp.Unix()) {
+				continue
+			}
+			entry.Fingerprint = buildLogLineFingerprint(sourceCtx, lineOffset, line)
+			parsed := parsedShardEntry{entry: *entry, endBytes: endBytes}
+			if whitelistMatcher != nil && whitelistMatcher.Enabled() {
+				parsed.match, parsed.matched = whitelistMatcher.Match(entry.IP)
+			}
+			result.entries = append(result.entries, parsed)
 		}
-		if matcher := p.whitelistMatchers[websiteID]; matcher != nil && matcher.Enabled() {
-			if match, ok := matcher.Match(entry.IP); ok {
-				batchWhitelistHits = p.recordWhitelistHit(websiteID, *entry, match, batchWhitelistHits)
+		return result
+	}
+
+	var parseWG sync.WaitGroup
+	parseWG.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			defer parseWG.Done()
+			for job := range parseJobs {
+				result := parseShard(job)
+				select {
+				case parseResults <- result:
+				case <-cancelParsing:
+					return
+				}
+			}
+		}()
+	}
+
+	// 读取端以目标字节数切分，但只在完整换行之后提交 shard，绝不截断日志行。
+	go func() {
+		var seq int64
+		dispatchShard := func(base int64, data []byte) bool {
+			if len(data) == 0 {
+				return true
+			}
+			select {
+			case shardSlots <- struct{}{}:
+			case <-cancelParsing:
+				return false
+			}
+			select {
+			case parseJobs <- parseShardJob{seq: seq, baseBytes: base, data: data}:
+				seq++
+				addParsingProgress(int64(len(data)))
+				return true
+			case <-cancelParsing:
+				return false
 			}
 		}
-		batch = append(batch, *entry)
-		bucket := (ts / 3600) * 3600
-		parsedBuckets[bucket] = struct{}{}
-		if minTs == 0 || ts < minTs {
-			minTs = ts
-		}
-		if ts > maxTs {
-			maxTs = ts
-		}
-		entriesCount++
-		parserResult.TotalEntries++ // 累加到总结果中，而非赋值
 
-		if len(batch) >= p.parseBatchSize {
-			processBatch()
+		totalBytes, readErr := readLineAlignedShards(reader, parseShardSize, dispatchShard)
+		close(parseJobs)
+		parseWG.Wait()
+		close(parseResults)
+		scanDone <- scanSummary{totalBytes: totalBytes, err: readErr}
+	}()
+
+	// shard 完成顺序不确定；按字节范围序号重排后再组批，保持原日志顺序和精确 offset。
+	nextSeq := int64(0)
+	pendingResults := make(map[int64]parseShardResult, queueSize)
+	for result := range parseResults {
+		if pipelineFailed {
+			continue
+		}
+		pendingResults[result.seq] = result
+		for {
+			ordered, ok := pendingResults[nextSeq]
+			if !ok {
+				break
+			}
+			delete(pendingResults, nextSeq)
+			nextSeq++
+			<-shardSlots
+
+			for _, parsed := range ordered.entries {
+				entry := parsed.entry
+				ts := entry.Timestamp.Unix()
+				if parsed.matched {
+					batchWhitelistHits = p.recordWhitelistHit(websiteID, entry, parsed.match, batchWhitelistHits)
+				}
+				batch = append(batch, entry)
+				bucket := (ts / 3600) * 3600
+				batchBuckets[bucket] = struct{}{}
+				if batchMinTs == 0 || ts < batchMinTs {
+					batchMinTs = ts
+				}
+				if ts > batchMaxTs {
+					batchMaxTs = ts
+				}
+
+				if len(batch) >= p.parseBatchSize {
+					if !submitBatch(parsed.endBytes) {
+						pipelineFailed = true
+						stopParsing()
+						break
+					}
+				}
+			}
+			if pipelineFailed {
+				break
+			}
 		}
 	}
 
-	processBatch() // 处理剩余的记录
-	if pendingBytes > 0 {
-		addParsingProgress(pendingBytes)
+	summary := <-scanDone
+	if !pipelineFailed {
+		if submitBatch(summary.totalBytes) {
+			if !awaitInFlight() {
+				pipelineFailed = true
+			}
+		} else {
+			pipelineFailed = true
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		logrus.Errorf("扫描网站 %s 的文件时出错: %v", websiteID, err)
-		p.notifyLogParsing(websiteID, "", "扫描日志文件", err)
+	if summary.err != nil {
+		parserResult.Success = false
+		parserResult.Error = summary.err
+		logrus.Errorf("扫描网站 %s 的文件时出错: %v", websiteID, summary.err)
+		p.notifyLogParsing(websiteID, "", "扫描日志文件", summary.err)
 	}
 	p.flushWhitelistHits(whitelistHits)
-
 	p.recordParsedHourBuckets(websiteID, parsedBuckets)
-	return entriesCount, totalBytes, minTs, maxTs // 返回当前文件的日志条数
+
+	// 全部批次成功时，可以安全跳过末尾被过滤/无法解析的行；数据库失败时只推进到
+	// 最后一个已提交批次，确保失败批次会在下次扫描时重试。
+	if !pipelineFailed {
+		committedBytes = summary.totalBytes
+	}
+	return entriesCount, committedBytes, minTs, maxTs
 }
 
 // IngestLines parses and inserts streamed log lines for a website/source.
