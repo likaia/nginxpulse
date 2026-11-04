@@ -99,14 +99,14 @@ func (s *ClientStatsManager) Query(query StatsQuery) (StatsResult, error) {
 	locationType := ""
 	joinClause := ""
 	if s.statsType == "location" {
-		locationType = query.ExtraParam["locationType"].(string)
+		locationType, _ = query.ExtraParam["locationType"].(string)
 		switch locationType {
 		case "domestic", "city":
 			statsType = "domestic"
 		case "global":
 			statsType = "global"
 		default:
-			statsType = locationType
+			return result, fmt.Errorf("locationType 参数无效，必须为 domestic、city 或 global")
 		}
 	}
 	selectExpr := statsType
@@ -188,9 +188,6 @@ func (s *ClientStatsManager) Query(query StatsQuery) (StatsResult, error) {
 		if locationType == "global" {
 			selectExpr = "loc.global"
 			groupExpr = "loc.global"
-		} else if locationType != "domestic" && locationType != "city" {
-			selectExpr = "loc." + statsType
-			groupExpr = selectExpr
 		}
 	}
 	if s.statsType == "location" && (locationType == "domestic" || locationType == "city") {

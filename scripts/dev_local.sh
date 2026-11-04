@@ -227,6 +227,24 @@ start_postgres() {
   echo "Waiting for PostgreSQL to be ready..."
   for _ in {1..30}; do
     if docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
+      # Official postgres images bootstrap POSTGRES_USER as superuser. Apply the
+      # same role split as the embedded image, including upgrades of dev volumes.
+      docker cp "$ROOT_DIR/scripts/embedded_postgres.sh" "$PG_CONTAINER:/tmp/nginxpulse-embedded-postgres.sh" >/dev/null
+      docker cp "$ROOT_DIR/scripts/postgres-app-role.sql" "$PG_CONTAINER:/tmp/nginxpulse-app-role.sql" >/dev/null
+      docker cp "$ROOT_DIR/scripts/postgres-app-owner.sql" "$PG_CONTAINER:/tmp/nginxpulse-app-owner.sql" >/dev/null
+      docker exec -i -e POSTGRES_USER="$PG_USER" -e POSTGRES_PASSWORD="$PG_PASSWORD" \
+        -e POSTGRES_DB="$PG_DB" "$PG_CONTAINER" sh -se <<'SH'
+APP_USER=postgres
+APP_GROUP=postgres
+POSTGRES_ADMIN_USER=nginxpulse_admin
+POSTGRES_SOCKET_DIR=/var/run/postgresql
+POSTGRES_PORT=5432
+POSTGRES_APP_ROLE_SQL=/tmp/nginxpulse-app-role.sql
+POSTGRES_APP_OWNER_SQL=/tmp/nginxpulse-app-owner.sql
+su-exec() { shift; "$@"; }
+. /tmp/nginxpulse-embedded-postgres.sh
+ensure_database
+SH
       echo "PostgreSQL is ready at ${PG_HOST}:${PG_PORT} (${PG_DB})."
       DB_DSN="$DEFAULT_DSN"
       export DB_DSN

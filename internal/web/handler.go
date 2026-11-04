@@ -1216,7 +1216,7 @@ func SetupRoutes(
 				"website_id": query.WebsiteID,
 			}).WithError(err).Error("查询统计数据失败")
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": fmt.Sprintf("查询失败: %v", err),
+				"error": "统计查询失败，请查看服务端日志",
 			})
 			return
 		}

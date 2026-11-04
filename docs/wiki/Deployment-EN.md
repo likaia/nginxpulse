@@ -33,6 +33,28 @@ Useful env vars (built-in PG):
 If you want to use an external PG, set `DB_DSN` and the built-in PG will be bypassed.
 In this case the built-in PG will not start, `POSTGRES_*` is ignored, and you can drop the `/app/var/pgdata` mount.
 
+
+### Database privileges and upgrades
+
+A dedicated ordinary role owning the application database and its objects is recommended. Avoid `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`, or membership (including indirect membership) in privileged roles or `pg_read_server_files`, `pg_write_server_files`, `pg_execute_server_program`. Startup logs a warning if excessive privileges are detected or inspection fails, and continues with the existing connection for upgrade compatibility.
+
+The embedded PostgreSQL startup separates the administrator from the application before launching the backend. Fresh installs bootstrap the independent `POSTGRES_ADMIN_USER` (default `nginxpulse_admin`). Existing clusters rename the old bootstrap superuser to the administrator, recreate the original application login as an ordinary role, and transfer application tables and sequences in the application database to it. Data and the application login name are preserved; restarts can retry interrupted ownership transfers. The administrator has no password and is used only over the container's Unix socket. `POSTGRES_ADMIN_USER` must differ from `POSTGRES_USER`. Back up `pgdata` before upgrading. Do not switch directly back to an old image after migration: its entrypoint depends on the application's database-creation privilege.
+
+Existing external database accounts and `DB_DSN` require no changes when upgrading. The application never renames, demotes or changes these roles or their memberships. Both SQL injection fixes work independently of database privilege reduction. As optional hardening, your database administrator can create a dedicated ordinary role, transfer ownership of the application database and its existing tables/sequences, then update `DB_DSN`; this is not an upgrade prerequisite. PostgreSQL does not allow demoting the bootstrap superuser created by `initdb`; use a new application role. For a dedicated application database, the repository provides these scripts:
+
+```bash
+# Replace the sample administrator connections and password.
+psql 'postgresql://admin@db-host/postgres' -v ON_ERROR_STOP=1 \
+  -v app_user=nginxpulse_app -v app_password='replace-with-a-strong-password' \
+  -v app_db=nginxpulse -f scripts/postgres-app-role.sql
+# Transfer application tables/sequences/views and schemas from the old owner.
+psql 'postgresql://admin@db-host/nginxpulse' -v ON_ERROR_STOP=1 \
+  -v app_user=nginxpulse_app -v admin_user=original_owner \
+  -f scripts/postgres-app-owner.sql
+```
+
+Run security regressions with `bash scripts/test_security.sh`. It creates and removes disposable PostgreSQL containers to verify both injections, HTTP error redaction, fresh installs, legacy upgrades, ordinary-role schema/partition/cleanup operations, denial of embedded application server file and program privileges, and continued use of existing privileged external roles with warnings and unchanged privileges.
+
 ## Docker Compose
 A `docker-compose.yml` is provided in the repo. Update:
 - log mount paths

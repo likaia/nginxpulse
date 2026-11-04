@@ -36,6 +36,28 @@ docker run -d --name nginxpulse \
 如果你想外接自建 PG，可显式传入 `DB_DSN`，内置 PG 会被绕过。
 此时不会启动内置 PG，`POSTGRES_*` 参数会被忽略，`/app/var/pgdata` 也无需挂载。
 
+
+### 数据库账号权限与旧版本升级
+
+推荐使用专用普通账号管理应用数据库内的表、索引、序列和分区，避免拥有 `SUPERUSER`、`CREATEDB`、`CREATEROLE`、`REPLICATION`、`BYPASSRLS`，以及通过角色成员关系获得这些权限或 `pg_read_server_files`、`pg_write_server_files`、`pg_execute_server_program`。应用启动时会检查这些权限；发现权限过高或无法检查时仅记录告警，仍沿用现有连接，不阻止升级启动。
+
+内置 PostgreSQL 在启动后、启动后端前自动完成账号分离。新安装使用独立的 `POSTGRES_ADMIN_USER`（默认 `nginxpulse_admin`）初始化数据库，应用仍使用 `POSTGRES_USER`。升级已有数据目录时，会将原来的引导超级用户改名为管理账号，再以原应用账号名创建普通账号并迁移应用数据库内的表和序列所有权；数据库内容和应用连接账号名保持不变，重复启动可安全重试。管理账号清除密码，仅用于容器内 Unix socket 管理，不提供给应用。`POSTGRES_ADMIN_USER` 必须与 `POSTGRES_USER` 不同。升级前请备份 `pgdata`；升级后不要直接换回旧镜像（旧入口依赖应用账号的建库权限）。
+
+外接数据库升级时无需修改现有账号或 `DB_DSN`。应用不会自动重命名、降权或修改外接账号及其角色成员关系；两处 SQL 注入修复不依赖数据库降权。若希望进一步收紧权限，可由数据库管理员创建专用普通账号，将应用数据库及已有应用表、序列的所有权交给该账号，再更新 `DB_DSN`（可选加固，不是升级前置条件）。若原账号是 `initdb` 创建的引导超级用户，PostgreSQL 不允许直接将它降为普通账号，应创建新账号。对于专用应用数据库，可使用仓库内的脚本：
+
+```bash
+# 使用管理员连接创建普通应用账号及数据库；请替换示例连接及密码。
+psql 'postgresql://admin@db-host/postgres' -v ON_ERROR_STOP=1 \
+  -v app_user=nginxpulse_app -v app_password='replace-with-a-strong-password' \
+  -v app_db=nginxpulse -f scripts/postgres-app-role.sql
+# 在应用数据库内，将原属主拥有的应用表/序列/视图及 schema 交给新账号。
+psql 'postgresql://admin@db-host/nginxpulse' -v ON_ERROR_STOP=1 \
+  -v app_user=nginxpulse_app -v admin_user=original_owner \
+  -f scripts/postgres-app-owner.sql
+```
+
+安全回归测试：`bash scripts/test_security.sh`。脚本使用并删除独立的临时 PostgreSQL 容器，验证两处注入、HTTP 错误脱敏、新库初始化、旧库升级、普通账号的建表/分区/清理功能、内置账号的服务器文件读写和程序执行权限被拒绝，以及外接高权限账号仅告警、不改权限并可继续使用。
+
 ## Docker Compose
 仓库根目录已提供 `docker-compose.yml`，可直接复制修改：
 - 调整日志挂载路径。

@@ -8,6 +8,8 @@ TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
 POSTGRES_USER="${POSTGRES_USER:-nginxpulse}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-nginxpulse}"
 POSTGRES_DB="${POSTGRES_DB:-nginxpulse}"
+POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-nginxpulse_admin}"
+POSTGRES_SOCKET_DIR="${POSTGRES_SOCKET_DIR:-/run/postgresql}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_LISTEN="${POSTGRES_LISTEN:-127.0.0.1}"
 POSTGRES_CONNECT_HOST="${POSTGRES_CONNECT_HOST:-127.0.0.1}"
@@ -421,57 +423,7 @@ if [ "$USE_EMBEDDED_PG" = "1" ]; then
   fi
 fi
 
-init_postgres() {
-  if [ -s "$PGDATA/PG_VERSION" ]; then
-    return 0
-  fi
-
-  echo "nginxpulse: initializing postgres data dir at $PGDATA"
-  PWFILE="$(mktemp -p "$TMPDIR")"
-  # Ensure the postgres user can read the password file created by root.
-  chown "$APP_USER:$APP_GROUP" "$PWFILE" 2>/dev/null || true
-  chmod 600 "$PWFILE" 2>/dev/null || true
-  printf '%s' "$POSTGRES_PASSWORD" > "$PWFILE"
-  su-exec "$APP_USER:$APP_GROUP" initdb -D "$PGDATA" \
-    --username="$POSTGRES_USER" \
-    --pwfile="$PWFILE" \
-    --auth-host=md5 \
-    --auth-local=trust >/dev/null
-  rm -f "$PWFILE"
-}
-
-start_postgres() {
-  if [ "$(id -u)" = "0" ]; then
-    mkdir -p /run/postgresql
-    chown "$APP_USER:$APP_GROUP" /run/postgresql 2>/dev/null || true
-    chmod 775 /run/postgresql 2>/dev/null || true
-  fi
-  su-exec "$APP_USER:$APP_GROUP" postgres -D "$PGDATA" \
-    -p "$POSTGRES_PORT" \
-    -c listen_addresses="$POSTGRES_LISTEN" &
-  pg_pid=$!
-
-  waited=0
-  while [ "$waited" -lt "$POSTGRES_STARTUP_TIMEOUT" ]; do
-    if su-exec "$APP_USER:$APP_GROUP" pg_isready -h "$POSTGRES_CONNECT_HOST" -p "$POSTGRES_PORT" >/dev/null 2>&1; then
-      return 0
-    fi
-    if ! kill -0 "$pg_pid" >/dev/null 2>&1; then
-      return 1
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  return 1
-}
-
-ensure_database() {
-  export PGPASSWORD="$POSTGRES_PASSWORD"
-  if ! su-exec "$APP_USER:$APP_GROUP" psql -h "$POSTGRES_CONNECT_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d postgres -tAc \
-    "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
-    su-exec "$APP_USER:$APP_GROUP" createdb -h "$POSTGRES_CONNECT_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB"
-  fi
-}
+. /app/embedded_postgres.sh
 
 if [ "$USE_EMBEDDED_PG" = "1" ] && [ -z "${DB_DSN:-}" ]; then
   export DB_DRIVER="postgres"

@@ -188,8 +188,44 @@ func openPostgres(cfg config.DatabaseConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("连接 PostgreSQL 失败(host=%s db=%s user=%s): %w",
 			pgConfig.Host, pgConfig.Database, pgConfig.User, err)
 	}
+	warnPostgresRole(db)
 
 	return db, nil
+}
+
+// Existing external database accounts must keep working across upgrades. Report
+// excessive privileges without changing a shared role or blocking startup.
+func warnPostgresRole(db *sql.DB) {
+	privileged, err := postgresRoleHasElevatedPrivileges(db)
+	if err != nil {
+		logrus.WithError(err).WithField("security_event", "postgres_role_check_failed").Warn("检查 PostgreSQL 账号权限失败，将继续使用现有数据库连接")
+		return
+	}
+	if privileged {
+		logrus.WithField("security_event", "postgres_role_privileges").Warn("数据库账号权限过高，将继续使用现有连接以兼容升级；建议使用仅拥有应用数据库及其表的普通账号，移除集群管理及服务器文件/程序权限（包括角色成员权限）")
+	}
+}
+
+// Include both the login and effective roles, plus inherited/SET ROLE privileges.
+func postgresRoleHasElevatedPrivileges(db *sql.DB) (bool, error) {
+	var privileged bool
+	err := db.QueryRow(`WITH RECURSIVE reachable_roles AS (
+        SELECT oid, rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+        FROM pg_roles WHERE rolname IN (current_user, session_user)
+        UNION
+        SELECT p.oid, p.rolname, p.rolsuper, p.rolcreatedb, p.rolcreaterole, p.rolreplication, p.rolbypassrls
+        FROM reachable_roles r
+        JOIN pg_auth_members m ON m.member = r.oid
+        JOIN pg_roles p ON p.oid = m.roleid
+    ) SELECT EXISTS (
+        SELECT 1 FROM reachable_roles
+        WHERE rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls
+           OR rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program')
+    )`).Scan(&privileged)
+	if err != nil {
+		return false, err
+	}
+	return privileged, nil
 }
 
 // 初始化数据库

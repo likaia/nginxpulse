@@ -100,6 +100,9 @@ func (f *StatsFactory) Repo() *store.Repository {
 
 // QueryStats 通过指定类型的管理器查询统计数据
 func (f *StatsFactory) QueryStats(managerType string, query StatsQuery) (StatsResult, error) {
+	if err := validateWebsiteID(query.WebsiteID); err != nil {
+		return nil, err
+	}
 	// 获取对应的管理器
 	manager, exists := f.GetManager(managerType)
 	if !exists {
@@ -200,7 +203,7 @@ func (f *StatsFactory) BuildQueryFromRequest(
 		"browser":          {"id": "string", "timeRange": "string", "limit": "int"},
 		"os":               {"id": "string", "timeRange": "string", "limit": "int"},
 		"device":           {"id": "string", "timeRange": "string", "limit": "int"},
-		"location":         {"id": "string", "timeRange": "string", "limit": "int", "locationType": "string"},
+		"location":         {"id": "string", "timeRange": "string", "limit": "int", "locationType": "enum:domestic,city,global"},
 		"logs":             {"id": "string", "page": "int", "pageSize": "int", "sortField": "string", "sortOrder": "enum:asc,desc"},
 		"session":          {"id": "string", "page": "int", "pageSize": "int"},
 		"session_summary":  {"id": "string", "timeRange": "string"},
@@ -216,6 +219,9 @@ func (f *StatsFactory) BuildQueryFromRequest(
 	// 获取网站ID
 	websiteID, err := getRequiredString(params, "id")
 	if err != nil {
+		return query, err
+	}
+	if err := validateWebsiteID(websiteID); err != nil {
 		return query, err
 	}
 	query.WebsiteID = websiteID
@@ -439,6 +445,15 @@ func statsTypeSupportsURLFilter(statsType string) bool {
 	default:
 		return false
 	}
+}
+
+// Website IDs become SQL identifier prefixes. Only accept IDs issued by config,
+// including runtime-discovered sites (whose collision suffix can contain '_').
+func validateWebsiteID(id string) error {
+	if _, ok := config.GetWebsiteByID(id); !ok {
+		return fmt.Errorf("站点不存在")
+	}
+	return nil
 }
 
 // getRequiredInt 获取并验证必须的整数参数

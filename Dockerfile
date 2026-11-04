@@ -75,6 +75,9 @@ RUN apk add --no-cache su-exec \
 
 COPY --from=backend-builder /out/nginxpulse /app/nginxpulse
 COPY entrypoint.sh /app/entrypoint.sh
+COPY scripts/embedded_postgres.sh /app/embedded_postgres.sh
+COPY scripts/postgres-app-role.sql /app/postgres-app-role.sql
+COPY scripts/postgres-app-owner.sql /app/postgres-app-owner.sql
 COPY docs/external_ips.txt /app/assets/external_ips.txt
 COPY --from=webapp-builder /app/webapp/dist /usr/share/nginx/html
 COPY --from=webapp-builder /app/webapp_mobile/dist /usr/share/nginx/html/m
