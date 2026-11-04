@@ -177,6 +177,7 @@ func (m *RealtimeStatsManager) deviceBreakdown(tableName string, startTime, endT
 	var (
 		pc     int
 		mobile int
+		apple  int
 		other  int
 		total  int
 	)
@@ -192,6 +193,8 @@ func (m *RealtimeStatsManager) deviceBreakdown(tableName string, startTime, endT
 			pc += count
 		case "手机", "平板":
 			mobile += count
+		case "苹果设备":
+			apple += count
 		default:
 			other += count
 		}
@@ -201,6 +204,7 @@ func (m *RealtimeStatsManager) deviceBreakdown(tableName string, startTime, endT
 	return []RealtimeItem{
 		{Name: "PC端", Count: pc, Percent: safePercent(pc, total)},
 		{Name: "移动端", Count: mobile, Percent: safePercent(mobile, total)},
+		{Name: "苹果设备", Count: apple, Percent: safePercent(apple, total)},
 		{Name: "其他", Count: other, Percent: safePercent(other, total)},
 	}
 }

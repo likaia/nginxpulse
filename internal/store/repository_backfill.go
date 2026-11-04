@@ -100,7 +100,7 @@ func (r *Repository) backfillAggregates(websiteID string) error {
 
 	logrus.WithField("website", websiteID).Info("开始回填聚合数据")
 
-	tx, err := r.db.Begin()
+	tx, err := r.database().Begin()
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func (r *Repository) backfillFirstSeen(websiteID string) error {
 
 	logrus.WithField("website", websiteID).Info("开始回填首次访问数据")
 
-	tx, err := r.db.Begin()
+	tx, err := r.beginCleanupTx()
 	if err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func (r *Repository) backfillSessions(websiteID string) error {
 
 	logrus.WithField("website", websiteID).Info("开始回填会话数据")
 
-	tx, err := r.db.Begin()
+	tx, err := r.database().Begin()
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func (r *Repository) backfillSessionAggregates(websiteID string) error {
 
 	logrus.WithField("website", websiteID).Info("开始回填会话聚合数据")
 
-	tx, err := r.db.Begin()
+	tx, err := r.database().Begin()
 	if err != nil {
 		return err
 	}
@@ -393,25 +393,25 @@ func (r *Repository) cleanupAggregates(websiteID string, cutoff time.Time) error
 	cutoffHour := hourBucket(cutoff)
 	cutoffDay := dayBucket(cutoff)
 
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE bucket < ?`, aggHourly)),
 		cutoffHour,
 	); err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE bucket < ?`, aggHourlyIP)),
 		cutoffHour,
 	); err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE day < ?`, aggDaily)),
 		cutoffDay,
 	); err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE day < ?`, aggDailyIP)),
 		cutoffDay,
 	); err != nil {
@@ -436,7 +436,7 @@ func (r *Repository) cleanupSessions(websiteID string, cutoff time.Time) error {
 		return err
 	}
 
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE start_ts < ?`, sessionTable)),
 		cutoff.Unix(),
 	); err != nil {
@@ -448,10 +448,16 @@ func (r *Repository) cleanupSessions(websiteID string, cutoff time.Time) error {
 		return err
 	}
 
-	if _, err := r.db.Exec(fmt.Sprintf(`DELETE FROM "%s"`, stateTable)); err != nil {
+	// 不能把清空和回填拆成两个自动提交语句：超时必须保留原 session_state。
+	tx, err := r.beginCleanupTx()
+	if err != nil {
 		return err
 	}
-	if _, err := r.db.Exec(fmt.Sprintf(
+	defer tx.Rollback()
+	if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM "%s"`, stateTable)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(fmt.Sprintf(
 		`INSERT INTO "%s" (ip_id, ua_id, session_id, last_ts)
          SELECT DISTINCT ON (ip_id, ua_id) ip_id, ua_id, id, end_ts
          FROM "%s"
@@ -461,6 +467,9 @@ func (r *Repository) cleanupSessions(websiteID string, cutoff time.Time) error {
              last_ts = excluded.last_ts`,
 		stateTable, sessionTable,
 	)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
@@ -478,7 +487,7 @@ func (r *Repository) cleanupSessionAggregates(websiteID string, cutoff time.Time
 
 	cutoffDay := dayBucket(cutoff)
 
-	if _, err := r.db.Exec(
+	if _, err := r.database().Exec(
 		sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE day < ?`, dailyTable)),
 		cutoffDay,
 	); err != nil {
@@ -490,7 +499,7 @@ func (r *Repository) cleanupSessionAggregates(websiteID string, cutoff time.Time
 		return err
 	}
 	if hasEntry {
-		if _, err := r.db.Exec(
+		if _, err := r.database().Exec(
 			sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE day < ?`, entryTable)),
 			cutoffDay,
 		); err != nil {
@@ -512,7 +521,7 @@ func (r *Repository) rebuildSessionAggregatesForDay(websiteID, day string) error
 	}
 	end := start.Add(24 * time.Hour)
 
-	tx, err := r.db.Begin()
+	tx, err := r.beginCleanupTx()
 	if err != nil {
 		return err
 	}
@@ -572,7 +581,7 @@ func (r *Repository) rebuildHourlyAggregate(websiteID string, bucket int64) erro
 	start := bucket
 	end := bucket + 3600
 
-	tx, err := r.db.Begin()
+	tx, err := r.beginCleanupTx()
 	if err != nil {
 		return err
 	}
@@ -640,7 +649,7 @@ func (r *Repository) rebuildDailyAggregate(websiteID string, day string) error {
 	}
 	end := start.Add(24 * time.Hour)
 
-	tx, err := r.db.Begin()
+	tx, err := r.beginCleanupTx()
 	if err != nil {
 		return err
 	}
@@ -712,7 +721,7 @@ func (r *Repository) clearAggregateTablesForWebsite(websiteID string) error {
 		if !exists {
 			continue
 		}
-		if _, err := r.db.Exec(fmt.Sprintf(`DELETE FROM "%s"`, table)); err != nil {
+		if _, err := r.database().Exec(fmt.Sprintf(`DELETE FROM "%s"`, table)); err != nil {
 			return err
 		}
 	}

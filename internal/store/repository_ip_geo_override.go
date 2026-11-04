@@ -183,6 +183,8 @@ func (r *Repository) applyIPGeoLocationForWebsite(
 	ip string,
 	entry IPGeoCacheEntry,
 ) (logsAffected int64, sessionsAffected int64, err error) {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	logTable := fmt.Sprintf("%s_nginx_logs", websiteID)
 	exists, err := r.tableExists(logTable)
 	if err != nil || !exists {

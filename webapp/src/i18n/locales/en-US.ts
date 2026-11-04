@@ -463,6 +463,7 @@ const enUS = {
     deviceDesktop: 'Desktop',
     deviceMobile: 'Mobile',
     deviceOther: 'Other',
+    deviceApple: 'Apple devices',
     detail: 'Details',
     statusCode: 'Status code',
     hitTime: 'Hit time',
@@ -841,6 +842,7 @@ const enUS = {
     mobileDevice: 'Mobile',
     tabletDevice: 'Tablet',
     otherDevice: 'Other device',
+    appleDevice: 'Apple device',
   },
 };
 

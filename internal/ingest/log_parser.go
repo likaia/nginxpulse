@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -29,7 +30,6 @@ var (
 	defaultNPMLogRegex          = `^\[(?P<time>[^\]]+)\] - (?P<status>\d+) (?P<upstream_status>\d+) - (?P<method>\S+) (?P<scheme>\S+) (?P<host>\S+) "(?P<path>[^"]+)" \[Client (?P<ip>[^\]]+)\] \[Length (?P<bytes>\d+)\] \[Gzip (?P<gzip>[^\]]+)\] \[Sent-to (?P<upstream>[^\]]+)\] "(?P<ua>[^"]+)" "(?P<referer>[^"]*)"`
 	defaultSafeLineWAFLogRegex  = `^(?P<ip>\S+)\s*(?:\|\s*|-\s+)(?P<user>\S+)\s*(?:\|\s*|\[\s*)(?P<time>[^\]|]+?)(?:\]\s+|\s*\|\s*)"(?P<host>[^"]*)"\s*(?:\|\s*|\s+)"(?P<request>[^"]*)"\s*(?:\|\s*|\s+)(?P<status>\d{3})\s*(?:\|\s*|\s+)(?P<bytes>\d+|-)\s*(?:\|\s*|\s+)"(?P<referer>[^"]*)"\s*(?:\|\s*|\s+)"(?P<ua>[^"]*)"(?:\s*(?:\|\s*|\s+)"(?P<http_x_forwarded_for>[^"]*)")?$`
 	defaultZoraxyLogRegex       = `^\[?(?P<time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?)\]?\s+\[router:(?P<router>[^\]]+)\]\s+\[origin:(?P<host>[^\]]*)\]\s+\[client:\s*(?P<ip>[^\]]+)\]\s+\[useragent:\s*(?P<ua>[^\]]*)\]\s+(?P<method>\S+)\s+(?P<url>\S+)\s+(?P<status>\d{3})\s*$`
-	lastCleanupDate             = ""
 	parsingMu                   sync.RWMutex
 	parsingMode                 parseMode
 	parsingWebsiteID            string
@@ -555,24 +555,8 @@ func computeBackfillBytes(done bool, backfillEnd, backfillOffset, lastSize int64
 }
 
 // CleanOldLogs 清理保留天数之前的日志数据
-func (p *LogParser) CleanOldLogs() error {
-	today := time.Now().Format("2006-01-02")
-	currentHour := time.Now().Hour()
-
-	shouldClean := lastCleanupDate == "" || (currentHour == 2 && lastCleanupDate != today)
-
-	if !shouldClean {
-		return nil
-	}
-
-	err := p.repo.CleanOldLogs()
-	if err != nil {
-		return err
-	}
-
-	lastCleanupDate = today
-
-	return nil
+func (p *LogParser) CleanOldLogs(ctx context.Context) error {
+	return p.repo.CleanOldLogsContext(ctx)
 }
 
 // ScanNginxLogs 增量扫描Nginx日志文件

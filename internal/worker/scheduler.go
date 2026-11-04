@@ -18,6 +18,32 @@ func InitialScan(parser *ingest.LogParser, interval time.Duration) {
 
 // RunScheduler executes periodic tasks on a ticker until ctx is canceled.
 func RunScheduler(ctx context.Context, parser *ingest.LogParser, interval time.Duration) {
+	runScheduler(ctx, parser, interval)
+}
+
+type periodicParser interface {
+	ScanNginxLogs() []ingest.ParserResult
+	BackfillHistory(time.Duration, int64) ingest.BackfillResult
+	ProcessPendingIPGeo(int) int
+	CleanOldLogs(context.Context) error
+}
+
+func runScheduler(ctx context.Context, parser periodicParser, interval time.Duration) {
+	if ctx.Err() != nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	cleanup := newCleanupWorker(parser.CleanOldLogs)
+	cleanupCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); cleanup.run(cleanupCtx) }()
+	defer func() { cancel(); <-done }()
+	// 初次扫描和后续扫描由同一调度器串行发起，避免启动扫描尚未完成又启动第二轮。
+	logrus.Info("****** 2 初始扫描 ******")
+	executePeriodicTasks(parser, interval)
+	cleanup.trigger()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -26,26 +52,28 @@ func RunScheduler(ctx context.Context, parser *ingest.LogParser, interval time.D
 	for {
 		select {
 		case <-ticker.C:
+			if ctx.Err() != nil {
+				return
+			}
 			iteration++
 			logrus.WithFields(logrus.Fields{"iteration": iteration}).Info("定期任务开始")
-			ExecutePeriodicTasks(parser, interval)
+			executePeriodicTasks(parser, interval)
+			cleanup.trigger()
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// ExecutePeriodicTasks runs log rotation, cleanup, and log scanning.
+// ExecutePeriodicTasks 优先采集；数据清理由独立的、可取消且有退避的工作器执行。
 func ExecutePeriodicTasks(parser *ingest.LogParser, interval time.Duration) {
+	executePeriodicTasks(parser, interval)
+}
+
+func executePeriodicTasks(parser periodicParser, interval time.Duration) {
 	{ // 1 日志轮转
 		if err := logging.RotateLogFile(); err != nil {
 			logrus.WithError(err).Warn("日志轮转失败")
-		}
-	}
-
-	{ // 2 清理旧数据
-		if err := parser.CleanOldLogs(); err != nil {
-			logrus.WithError(err).Warn("清理数据库中过期日志数据失败")
 		}
 	}
 

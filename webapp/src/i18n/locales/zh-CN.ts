@@ -463,6 +463,7 @@ const zhCN = {
     deviceDesktop: '电脑端',
     deviceMobile: '移动端',
     deviceOther: '其他',
+    deviceApple: '苹果设备',
     detail: '详情',
     statusCode: '状态码',
     hitTime: '命中时间',
@@ -839,6 +840,7 @@ const zhCN = {
     mobileDevice: '手机',
     tabletDevice: '平板',
     otherDevice: '其他设备',
+    appleDevice: '苹果设备',
   },
 };
 

@@ -1,14 +1,23 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/likaia/nginxpulse/internal/sqlutil"
 	"github.com/sirupsen/logrus"
 )
 
 func (r *Repository) cleanupOrphanDims(websiteID string) error {
+	if r.executor == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupWebsiteTimeout)
+		defer cancel()
+		return r.withCleanupConnection(ctx, func(scoped *Repository) error { return scoped.cleanupOrphanDims(websiteID) })
+	}
 	logTable := fmt.Sprintf("%s_nginx_logs", websiteID)
 	hasIPID, err := r.tableHasColumn(logTable, "ip_id")
 	if err != nil || !hasIPID {
@@ -18,31 +27,67 @@ func (r *Repository) cleanupOrphanDims(websiteID string) error {
 	type dimSpec struct {
 		table  string
 		column string
+		refs   map[string][]string
 	}
 	dims := []dimSpec{
-		{table: fmt.Sprintf("%s_dim_ip", websiteID), column: "ip_id"},
-		{table: fmt.Sprintf("%s_dim_url", websiteID), column: "url_id"},
+		{table: fmt.Sprintf("%s_dim_ip", websiteID), column: "ip_id", refs: map[string][]string{
+			"first_seen": {"ip_id"}, "agg_hourly_ip": {"ip_id"}, "agg_daily_ip": {"ip_id"}, "sessions": {"ip_id"}, "session_state": {"ip_id"},
+		}},
+		{table: fmt.Sprintf("%s_dim_url", websiteID), column: "url_id", refs: map[string][]string{"sessions": {"entry_url_id", "exit_url_id"}, "agg_entry_daily": {"entry_url_id"}}},
 		{table: fmt.Sprintf("%s_dim_referer", websiteID), column: "referer_id"},
-		{table: fmt.Sprintf("%s_dim_ua", websiteID), column: "ua_id"},
-		{table: fmt.Sprintf("%s_dim_location", websiteID), column: "location_id"},
+		{table: fmt.Sprintf("%s_dim_ua", websiteID), column: "ua_id", refs: map[string][]string{"sessions": {"ua_id"}, "session_state": {"ua_id"}}},
+		{table: fmt.Sprintf("%s_dim_location", websiteID), column: "location_id", refs: map[string][]string{"sessions": {"location_id"}}},
 	}
 
-	for _, dim := range dims {
+	for i, dim := range dims {
+		if r.activeCleanup != nil && i < r.activeCleanup.orphanDim {
+			continue
+		}
 		exists, err := r.tableExists(dim.table)
 		if err != nil {
 			return err
 		}
 		if !exists {
+			if r.activeCleanup != nil {
+				r.activeCleanup.orphanDim = i + 1
+			}
 			continue
 		}
-		if _, err := r.db.Exec(fmt.Sprintf(
-			`DELETE FROM "%s" WHERE id NOT IN (SELECT %s FROM "%s")`,
-			dim.table, dim.column, logTable,
-		)); err != nil {
+		var refs []string
+		for suffix, columns := range dim.refs {
+			table := fmt.Sprintf("%s_%s", websiteID, suffix)
+			ok, err := r.tableExists(table)
+			if err != nil {
+				return err
+			}
+			if ok {
+				for _, column := range columns {
+					refs = append(refs, fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM %s AS ref WHERE ref.%s = d.id)`, quoteTable(table), column))
+				}
+			}
+		}
+		sort.Strings(refs)
+		started := time.Now()
+		result, err := r.database().Exec(orphanDimsSQL(dim.table, logTable, dim.column, refs))
+		if err != nil {
+			return fmt.Errorf("table=%s: %w", dim.table, err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
 			return err
+		}
+		logrus.WithFields(logrus.Fields{"website_id": websiteID, "table": dim.table, "rows": count, "duration_ms": time.Since(started).Milliseconds()}).Info("清理维表孤儿数据完成")
+		if r.activeCleanup != nil {
+			r.activeCleanup.orphanDim = i + 1
 		}
 	}
 	return nil
+}
+
+func orphanDimsSQL(dimTable, logTable, column string, refs []string) string {
+	predicates := []string{fmt.Sprintf(`NOT EXISTS (SELECT 1 FROM %s AS l WHERE l.%s = d.id)`, quoteTable(logTable), column)}
+	predicates = append(predicates, refs...)
+	return fmt.Sprintf(`DELETE FROM %s AS d WHERE %s`, quoteTable(dimTable), strings.Join(predicates, " AND "))
 }
 
 func (r *Repository) clearDimTablesForWebsite(websiteID string) error {
@@ -338,7 +383,7 @@ func (r *Repository) migrateLegacyLogs(websiteID string) error {
 }
 
 func (r *Repository) tableExists(tableName string) (bool, error) {
-	row := r.db.QueryRow(sqlutil.ReplacePlaceholders(
+	row := r.database().QueryRow(sqlutil.ReplacePlaceholders(
 		`SELECT 1
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -373,7 +418,7 @@ func (r *Repository) tableHasRows(tableName string) (bool, error) {
 }
 
 func (r *Repository) tableHasColumn(tableName, columnName string) (bool, error) {
-	rows, err := r.db.Query(sqlutil.ReplacePlaceholders(
+	rows, err := r.database().Query(sqlutil.ReplacePlaceholders(
 		`SELECT 1
          FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = ? AND column_name = ?

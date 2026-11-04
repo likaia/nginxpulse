@@ -636,6 +636,11 @@
             <div class="daily-device-label">{{ t('daily.deviceAndroid') }}</div>
             <div class="daily-device-value">{{ deviceCards.android }}</div>
           </div>
+          <div class="daily-device-card">
+            <div class="daily-device-icon"><i class="ri-device-line"></i></div>
+            <div class="daily-device-label">{{ t('overview.deviceApple') }}</div>
+            <div class="daily-device-value">{{ deviceCards.apple }}</div>
+          </div>
         </div>
       </div>
       <div class="daily-device-list">
@@ -1137,6 +1142,7 @@ const hasVisitorDistributionData = computed(() => {
 });
 const deviceDistribution = computed(() => ({
   pc: getDeviceCount(deviceStats.value, 'desktop'),
+  apple: getDeviceCount(deviceStats.value, 'apple'),
   ios: getOsCount(osStats.value, ['ios', 'iphone', 'ipad']),
   android: getOsCount(osStats.value, ['android']),
 }));
@@ -1529,7 +1535,8 @@ function renderDeviceDonut() {
   const pcCount = getDeviceCount(deviceStats.value, 'desktop');
   const iosCount = getOsCount(osStats.value, ['ios', 'iphone', 'ipad']);
   const androidCount = getOsCount(osStats.value, ['android']);
-  if (pcCount + iosCount + androidCount <= 0) {
+  const appleCount = getDeviceCount(deviceStats.value, 'apple');
+  if (pcCount + iosCount + androidCount + appleCount <= 0) {
     return;
   }
   const ctx = deviceChartRef.value.getContext('2d');
@@ -1539,11 +1546,11 @@ function renderDeviceDonut() {
   deviceChart = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: [t('daily.devicePc'), t('daily.deviceIos'), t('daily.deviceAndroid')],
+      labels: [t('daily.devicePc'), t('daily.deviceIos'), t('daily.deviceAndroid'), t('overview.deviceApple')],
       datasets: [
         {
-          data: [pcCount, iosCount, androidCount],
-          backgroundColor: ['#1e7bff', '#22c55e', '#ff8a3d', '#6366f1'],
+          data: [pcCount, iosCount, androidCount, appleCount],
+          backgroundColor: ['#1e7bff', '#22c55e', '#ff8a3d', '#64748b'],
           borderWidth: 0,
         },
       ],
@@ -1744,6 +1751,7 @@ function buildDeviceCards(deviceData: SimpleSeriesStats | null, osData: SimpleSe
     pc: formatNumber(pcCount),
     ios: formatNumber(iosCount),
     android: formatNumber(androidCount),
+    apple: formatNumber(getDeviceCount(deviceData, 'apple')),
   }
 }
 
@@ -2020,7 +2028,7 @@ function buildSeriesMap(keys: string[], values: number[]) {
   return map;
 }
 
-function getDeviceCount(stats: SimpleSeriesStats | null, category: 'desktop' | 'mobile' | 'other') {
+function getDeviceCount(stats: SimpleSeriesStats | null, category: 'desktop' | 'mobile' | 'apple' | 'other') {
   if (!stats || !stats.key) {
     return 0;
   }
@@ -3735,7 +3743,7 @@ function buildDayTimeRange(dateStr: string) {
 
 .daily-device-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 

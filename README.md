@@ -287,6 +287,23 @@ nginxpulse: initializing postgres data dir at /app/var/pgdata
 例如你一次解析了几个月数据，后续仍会逐步清理掉保留天数之外的数据。  
 注意：该参数不影响原始 Nginx 日志文件，也不等于系统运行日志（`var/nginxpulse_data/nginxpulse.log`）的轮转策略。
 
+6) 页面可访问，但当天统计长时间不增长
+
+先核对原始访问日志是否增长、扫描断点是否更新，以及 PostgreSQL 的 `pg_stat_activity`。清理任务使用独立工作器：启动后先采集，再尝试清理，成功后在下一次本地时间 02:00 运行。失败从 1 分钟开始指数退避，最多 1 小时；只运行一份任务，已完成阶段在本进程内续跑，重启后安全重做。
+
+维护 SQL 最长 30 秒、锁等待最长 1 秒、单站点预算 45 秒、整轮预算 2 分钟。为防止维表和统计重建与写入交叉，必要的维护互斥仍会产生有限等待；不再出现清理语句无限运行、挡住后续所有采集的情况。日志包含 `website_id`、`stage`、`table`、耗时、删除数和 `retry_at`，可直接定位卡在哪个步骤。超时后会释放维护锁、回滚正在执行的重建事务，不清空原始日志或扫描断点。
+
+维护回归测试：
+
+```bash
+go test -race ./...
+# PostgreSQL 集成测试只接受本机的 nginxpulse_cleanup_test 专用数据库，切勿填生产库。
+NGINXPULSE_TEST_PG_DSN='postgres://postgres:password@127.0.0.1:5432/nginxpulse_cleanup_test?sslmode=disable' \
+  go test -race -count=1 ./internal/store ./internal/worker
+```
+
+本次维护优化无需手工建表或迁移 SQL。更新镜像时继续挂载原 `/app/var/nginxpulse_data`、`/app/var/pgdata`、配置和访问日志目录；不要删除数据目录或使用 `docker compose down -v`。
+
 ## 目录结构与主要文件
 
 ```

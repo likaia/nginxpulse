@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -307,6 +308,8 @@ func (r *Repository) BatchInsertLogsForWebsite(websiteID string, logs []NginxLog
 	if len(logs) == 0 {
 		return nil
 	}
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 
 	// 不修改调用方的 slice，避免潜在副作用
 	logsCopy := append([]NginxLogRecord(nil), logs...)
@@ -552,86 +555,15 @@ func (r *Repository) batchInsertLogsForWebsiteOnce(websiteID string, logs []Ngin
 
 // CleanOldLogs 清理保留天数之前的日志数据
 func (r *Repository) CleanOldLogs() error {
-	retentionDays := config.ReadConfig().System.LogRetentionDays
-	if retentionDays <= 0 {
-		retentionDays = 30
-	}
-	cutoffTime := time.Now().AddDate(0, 0, -retentionDays).Unix()
-	cutoff := time.Unix(cutoffTime, 0)
-
-	deletedCount := 0
-
-	rows, err := r.db.Query(`
-        SELECT c.relname
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind IN ('r', 'p')
-          AND c.relispartition = false
-          AND c.relname LIKE '%\_nginx_logs' ESCAPE '\'
-    `)
-	if err != nil {
-		return fmt.Errorf("查询表名失败: %v", err)
-	}
-	defer rows.Close()
-
-	var tableNames []string
-	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			logrus.WithError(err).Error("扫描表名失败")
-			continue
-		}
-		tableNames = append(tableNames, tableName)
-	}
-
-	for _, tableName := range tableNames {
-		result, err := r.db.Exec(
-			sqlutil.ReplacePlaceholders(fmt.Sprintf(`DELETE FROM "%s" WHERE timestamp < ?`, tableName)),
-			cutoffTime,
-		)
-		if err != nil {
-			logrus.WithError(err).Errorf("清理表 %s 的旧日志失败", tableName)
-			continue
-		}
-
-		count, _ := result.RowsAffected()
-		deletedCount += int(count)
-	}
-
-	if deletedCount > 0 {
-		visited := make(map[string]struct{})
-		for _, tableName := range tableNames {
-			if !strings.HasSuffix(tableName, "_nginx_logs") {
-				continue
-			}
-			websiteID := strings.TrimSuffix(tableName, "_nginx_logs")
-			if websiteID == "" {
-				continue
-			}
-			if _, ok := visited[websiteID]; ok {
-				continue
-			}
-			visited[websiteID] = struct{}{}
-			if err := r.cleanupOrphanDims(websiteID); err != nil {
-				logrus.WithError(err).Warnf("清理网站 %s 的维表孤儿数据失败", websiteID)
-			}
-			if err := r.cleanupAggregates(websiteID, cutoff); err != nil {
-				logrus.WithError(err).Warnf("清理网站 %s 的聚合数据失败", websiteID)
-			}
-			if err := r.cleanupSessions(websiteID, cutoff); err != nil {
-				logrus.WithError(err).Warnf("清理网站 %s 的会话数据失败", websiteID)
-			}
-		}
-
-		logrus.Infof("删除了 %d 条 %d 天前的日志记录", deletedCount, retentionDays)
-	}
-
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return r.CleanOldLogsContext(ctx)
 }
 
 // ClearLogsForWebsite 清空指定网站的日志数据
 func (r *Repository) ClearLogsForWebsite(websiteID string) error {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	tableName := fmt.Sprintf("%s_nginx_logs", websiteID)
 	if _, err := r.db.Exec(fmt.Sprintf(`DELETE FROM "%s"`, tableName)); err != nil {
 		return fmt.Errorf("清空网站日志失败: %w", err)

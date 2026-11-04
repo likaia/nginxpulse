@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -76,7 +77,9 @@ func TestZoraxyDefaultParserAcceptsMillisecondTimestamp(t *testing.T) {
 		t.Fatalf("newLogLineParser(zoraxy) error: %v", err)
 	}
 
-	line := `[2026-04-24 10:05:34.123] [router:redirect] [origin:app.example.com] [client: 203.0.113.10] [useragent: curl/8.7.1] GET /old 307`
+	// 本用例验证毫秒精度，不应随着固定日期超过保留期而失败。
+	stamp := time.Now().Truncate(time.Second).Format("2006-01-02 15:04:05") + ".123"
+	line := fmt.Sprintf(`[%s] [router:redirect] [origin:app.example.com] [client: 203.0.113.10] [useragent: curl/8.7.1] GET /old 307`, stamp)
 	p := &LogParser{retentionDays: 30}
 	record, err := p.parseRegexLogLine(parser, line)
 	if err != nil {

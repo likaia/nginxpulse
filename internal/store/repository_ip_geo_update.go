@@ -33,6 +33,8 @@ func (r *Repository) MarkIPGeoPendingForWebsite(
 	ips []string,
 	pendingLabel string,
 ) (err error) {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	if len(ips) == 0 {
 		return nil
 	}
@@ -190,6 +192,8 @@ func (r *Repository) updateIPGeoLocationsForWebsiteOnce(
 	locations map[string]IPGeoCacheEntry,
 	pendingLabel string,
 ) (err error) {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	logTable := fmt.Sprintf("%s_nginx_logs", websiteID)
 	exists, err := r.tableExists(logTable)
 	if err != nil || !exists {

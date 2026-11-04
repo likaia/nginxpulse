@@ -68,6 +68,12 @@
             <div class="realtime-device-rate">{{ formatPercent(deviceStats.mobile.percent) }}</div>
           </div>
           <div class="realtime-device-card">
+            <div class="realtime-device-icon"><i class="ri-apple-line"></i></div>
+            <div class="realtime-device-label">{{ t('overview.deviceApple') }}</div>
+            <div class="realtime-device-count">{{ formatCount(deviceStats.apple.count) }}</div>
+            <div class="realtime-device-rate">{{ formatPercent(deviceStats.apple.percent) }}</div>
+          </div>
+          <div class="realtime-device-card">
             <div class="realtime-device-icon"><i class="ri-shield-line"></i></div>
             <div class="realtime-device-label">{{ t('realtime.other') }}</div>
             <div class="realtime-device-count">{{ formatCount(deviceStats.other.count) }}</div>
@@ -434,15 +440,16 @@ const activeBars = computed(() => {
 
 const deviceStats = computed(() => {
   const breakdown = deviceBreakdown.value || [];
-  const totals = { desktop: 0, mobile: 0, other: 0 };
+  const totals = { desktop: 0, mobile: 0, apple: 0, other: 0 };
   breakdown.forEach((item) => {
     const category = normalizeDeviceCategory(item.name);
     totals[category] += item.count || 0;
   });
-  const total = totals.desktop + totals.mobile + totals.other;
+  const total = totals.desktop + totals.mobile + totals.apple + totals.other;
   return {
     pc: { count: totals.desktop, percent: total ? totals.desktop / total : 0 },
     mobile: { count: totals.mobile, percent: total ? totals.mobile / total : 0 },
+    apple: { count: totals.apple, percent: total ? totals.apple / total : 0 },
     other: { count: totals.other, percent: total ? totals.other / total : 0 },
   };
 });
@@ -482,7 +489,7 @@ const topCity = computed(() => getTopItem(cityItems.value));
 const hasRealtimeOverviewData = computed(() =>
   activeCount.value > 0 ||
   activeSeries.value.some((value) => Number(value || 0) > 0) ||
-  deviceStats.value.pc.count + deviceStats.value.mobile.count + deviceStats.value.other.count > 0
+  deviceStats.value.pc.count + deviceStats.value.mobile.count + deviceStats.value.apple.count + deviceStats.value.other.count > 0
 );
 const hasRefererData = computed(() => refererItems.value.length > 0);
 const hasPageData = computed(() => pageItems.value.length > 0);
@@ -819,7 +826,7 @@ function formatPercent(value: number) { return n(Number(value || 0), 'percent');
 
 .realtime-device-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 

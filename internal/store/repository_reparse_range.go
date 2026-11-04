@@ -8,6 +8,8 @@ import (
 )
 
 func (r *Repository) ClearLogsForWebsiteRange(websiteID string, start, end time.Time) error {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	if websiteID == "" {
 		return fmt.Errorf("websiteID 不能为空")
 	}
@@ -28,6 +30,8 @@ func (r *Repository) ClearLogsForWebsiteRange(websiteID string, start, end time.
 }
 
 func (r *Repository) RebuildWebsiteDerivedData(websiteID string) error {
+	r.maintenanceMu.RLock()
+	defer r.maintenanceMu.RUnlock()
 	if websiteID == "" {
 		return fmt.Errorf("websiteID 不能为空")
 	}

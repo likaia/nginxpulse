@@ -2908,7 +2908,7 @@ body.dark-mode .map-container {
 
 .device-cards {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
 
@@ -2934,6 +2934,10 @@ body.dark-mode .device-mini {
 
 .device-mini.green {
     background: rgba(34, 197, 94, 0.16);
+}
+
+.device-mini.apple {
+    background: rgba(100, 116, 139, 0.12);
 }
 
 .device-label {

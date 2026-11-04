@@ -617,6 +617,11 @@
             <div class="device-value">{{ deviceTotals.mobileText }}</div>
             <div class="device-percent">{{ deviceTotals.mobileRate }}</div>
           </div>
+          <div class="device-mini apple">
+            <div class="device-label">{{ t('overview.deviceApple') }}</div>
+            <div class="device-value">{{ deviceTotals.appleText }}</div>
+            <div class="device-percent">{{ deviceTotals.appleRate }}</div>
+          </div>
           <div class="device-mini green">
             <div class="device-label">{{ t('overview.deviceOther') }}</div>
             <div class="device-value">{{ deviceTotals.otherText }}</div>
@@ -1173,7 +1178,7 @@ const newOldStats = computed(() => {
 
 const deviceTotals = computed(() => {
   const stats = deviceStats.value;
-  const totals = { desktop: 0, mobile: 0, other: 0 };
+  const totals = { desktop: 0, mobile: 0, apple: 0, other: 0 };
 
   if (stats?.key && stats.uv) {
     stats.key.forEach((label, index) => {
@@ -1183,26 +1188,32 @@ const deviceTotals = computed(() => {
         totals.desktop += value;
       } else if (category === 'mobile') {
         totals.mobile += value;
+      } else if (category === 'apple') {
+        totals.apple += value;
       } else {
         totals.other += value;
       }
     });
   }
 
-  const total = totals.desktop + totals.mobile + totals.other;
+  const total = totals.desktop + totals.mobile + totals.apple + totals.other;
   const desktopRate = total ? ((totals.desktop / total) * 100).toFixed(2) + '%' : '0%';
   const mobileRate = total ? ((totals.mobile / total) * 100).toFixed(2) + '%' : '0%';
   const otherRate = total ? ((totals.other / total) * 100).toFixed(2) + '%' : '0%';
+  const appleRate = total ? ((totals.apple / total) * 100).toFixed(2) + '%' : '0%';
 
   return {
     desktop: totals.desktop,
     mobile: totals.mobile,
+    apple: totals.apple,
     other: totals.other,
     desktopText: formatCount(totals.desktop),
     mobileText: formatCount(totals.mobile),
+    appleText: formatCount(totals.apple),
     otherText: formatCount(totals.other),
     desktopRate,
     mobileRate,
+    appleRate,
     otherRate,
   }
 });
@@ -1216,7 +1227,7 @@ const geoRows = computed(() => buildGeoRows(geoData.value));
 const hasVisitsTrendData = computed(() => hasTimeSeriesData(timeSeriesData.value));
 const hasNewOldData = computed(() => newOldStats.value.newCount + newOldStats.value.oldCount > 0);
 const hasGeoData = computed(() => geoRows.value.length > 0);
-const hasDeviceData = computed(() => deviceTotals.value.desktop + deviceTotals.value.mobile + deviceTotals.value.other > 0);
+const hasDeviceData = computed(() => deviceTotals.value.desktop + deviceTotals.value.mobile + deviceTotals.value.apple + deviceTotals.value.other > 0);
 const serverStatusVisible = computed(() => {
   if (serverStatus.value) {
     return Boolean(serverStatus.value.enabled);
@@ -2475,7 +2486,7 @@ function renderDeviceChart(totals: typeof deviceTotals.value) {
     deviceChart.destroy();
     deviceChart = null;
   }
-  if (!deviceChartRef.value || totals.desktop + totals.mobile + totals.other <= 0) {
+  if (!deviceChartRef.value || totals.desktop + totals.mobile + totals.apple + totals.other <= 0) {
     return;
   }
 
@@ -2484,16 +2495,16 @@ function renderDeviceChart(totals: typeof deviceTotals.value) {
     return;
   }
 
-  const data = [totals.desktop, totals.mobile, totals.other];
+  const data = [totals.desktop, totals.mobile, totals.apple, totals.other];
 
   deviceChart = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels: [t('overview.deviceDesktop'), t('overview.deviceMobile'), t('overview.deviceOther')],
+      labels: [t('overview.deviceDesktop'), t('overview.deviceMobile'), t('overview.deviceApple'), t('overview.deviceOther')],
       datasets: [
         {
           data,
-          backgroundColor: ['#1e7bff', '#ff8a3d', '#2ec27e'],
+          backgroundColor: ['#1e7bff', '#ff8a3d', '#64748b', '#2ec27e'],
           borderWidth: 0,
         },
       ],

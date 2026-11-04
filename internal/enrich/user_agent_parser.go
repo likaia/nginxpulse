@@ -1,6 +1,10 @@
 package enrich
 
-import "github.com/mileusna/useragent"
+import (
+	"strings"
+
+	"github.com/mileusna/useragent"
+)
 
 // ParseUserAgent 解析 User-Agent 字符串
 func ParseUserAgent(uaString string) (browser, os, device string) {
@@ -20,7 +24,11 @@ func ParseUserAgent(uaString string) (browser, os, device string) {
 		os = "未知操作系统"
 	}
 
-	if userAgent.Mobile {
+	uaLower := strings.ToLower(uaString)
+	// Apple native clients do not always identify their device or operating system.
+	if strings.Contains(uaLower, "cfnetwork/") && strings.Contains(uaLower, "darwin/") {
+		device = "苹果设备"
+	} else if userAgent.Mobile {
 		device = "手机"
 	} else if userAgent.Tablet {
 		device = "平板"

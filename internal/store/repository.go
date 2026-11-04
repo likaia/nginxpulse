@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -128,6 +129,13 @@ type IPGeoCacheEntry struct {
 
 type Repository struct {
 	db *sql.DB
+	// 清理会重建统计表，必须与写入/重解析互斥；只在有时限的站点清理期间持有。
+	maintenanceMu  sync.RWMutex
+	cleanupMu      sync.Mutex
+	executor       repositoryDB
+	cleanupCursor  string // 有整轮预算时轮转站点，避免大站点让后面的站点长期饿死。
+	cleanupPending map[string]*websiteCleanupProgress
+	activeCleanup  *websiteCleanupProgress // 仅维护连接副本使用，阶段成功后才推进。
 }
 
 func NewRepository() (*Repository, error) {

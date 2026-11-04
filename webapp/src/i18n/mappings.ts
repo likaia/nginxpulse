@@ -27,6 +27,8 @@ const labelKeyMap: Record<string, string> = {
   mobile: 'labels.mobileDevice',
   '平板': 'labels.tabletDevice',
   tablet: 'labels.tabletDevice',
+  '苹果设备': 'labels.appleDevice',
+  'apple device': 'labels.appleDevice',
   '其他设备': 'labels.otherDevice',
   'other device': 'labels.otherDevice',
 };
@@ -151,6 +153,9 @@ export function isDirectReferer(value: string) {
 
 export function normalizeDeviceCategory(raw: string) {
   const value = String(raw || '').toLowerCase();
+  if (value.includes('苹果') || value.includes('apple device')) {
+    return 'apple';
+  }
   if (value.includes('桌面') || value.includes('desktop') || value.includes('pc')) {
     return 'desktop';
   }

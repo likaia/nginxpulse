@@ -74,7 +74,6 @@ func Run() error {
 	printStartupNotice(cfg)
 
 	interval := config.ParseInterval(cfg.System.TaskInterval, 5*time.Minute)
-	go worker.InitialScan(logParser, interval)
 
 	if cfg.System.DemoMode {
 		go worker.RunDemoGenerator(ctx, repository, time.Minute)
